@@ -230,8 +230,6 @@ func (r *Reader) readLine() (string, error) {
 	}
 	return string(data), nil
 }
-
-// ReadRecord reads the next record from the opened WARC file.
 func (r *Reader) ReadRecord() (*Record, error) {
 	// Go to the position of the next record in the file.
 	r.seekRecord()
@@ -253,22 +251,74 @@ func (r *Reader) ReadRecord() (*Record, error) {
 			header.Set(key, value)
 		}
 	}
-	// Determine the content length and then retrieve the record content.
-	length, err := strconv.Atoi(header["content-length"])
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse field Content-Length: %v", err)
+
+	var content []byte
+	var err error
+
+	// Check if Content-Length is set
+	lengthStr := header.Get("Content-Length")
+	if lengthStr != "" {
+		// If Content-Length is set, use it
+		length, err := strconv.Atoi(lengthStr)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse field Content-Length: %v", err)
+		}
+		content, err = r.readExactBytes(length)
+	} else {
+		// If Content-Length is not set, read until we find two consecutive newlines
+		content, err = r.readUntilDoubleNewline()
 	}
-	content, err := sliceReader(r.reader, length, r.mode == AsynchronousMode)
+
 	if err != nil {
 		return nil, err
 	}
+
+	// Update the Content-Length header with the actual length
+	header.Set("Content-Length", strconv.Itoa(len(content)))
+
 	r.record = &Record{
 		Header:  header,
-		Content: content,
+		Content: bytes.NewReader(content),
 	}
 	return r.record, nil
 }
 
+// readExactBytes reads exactly n bytes from the reader
+func (r *Reader) readExactBytes(n int) ([]byte, error) {
+	content := make([]byte, n)
+	_, err := io.ReadFull(r.reader, content)
+	return content, err
+}
+
+// readUntilDoubleNewline reads content until it encounters two consecutive newlines
+func (r *Reader) readUntilDoubleNewline() ([]byte, error) {
+	var content []byte
+	var consecutiveNewlines int
+
+	for {
+		b, err := r.reader.ReadByte()
+		if err != nil {
+			if err == io.EOF {
+				break
+			}
+			return nil, err
+		}
+
+		content = append(content, b)
+
+		if b == '\n' {
+			consecutiveNewlines++
+			if consecutiveNewlines == 2 {
+				break
+			}
+		} else {
+			consecutiveNewlines = 0
+		}
+	}
+
+	// Trim the trailing newlines
+	return bytes.TrimRight(content, "\r\n"), nil
+}
 // seekRecord moves the Reader to the position of the next WARC record
 // in the opened WARC file.
 func (r *Reader) seekRecord() error {
