@@ -17,6 +17,10 @@ import (
 // Mode defines the way Reader will generate Records.
 type Mode int
 
+const (
+	maxRecordSize = 1 * 1024 * 1024 // 1 MB
+)
+
 func (m Mode) String() string {
 	switch m {
 	case SequentialMode:
@@ -263,6 +267,9 @@ func (r *Reader) ReadRecord() (*Record, error) {
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse field Content-Length: %v", err)
 		}
+		if length > maxRecordSize {
+			return nil, fmt.Errorf("record size %d exceeds maximum allowed size of %d bytes", length, maxRecordSize)
+		}
 		content, err = r.readExactBytes(length)
 	} else {
 		// If Content-Length is not set, read until we find two consecutive newlines
@@ -295,7 +302,7 @@ func (r *Reader) readUntilDoubleNewline() ([]byte, error) {
 	var content []byte
 	var consecutiveNewlines int
 
-	for {
+	for len(content) < maxRecordSize {
 		b, err := r.reader.ReadByte()
 		if err != nil {
 			if err == io.EOF {
@@ -314,6 +321,10 @@ func (r *Reader) readUntilDoubleNewline() ([]byte, error) {
 		} else {
 			consecutiveNewlines = 0
 		}
+	}
+
+	if len(content) >= limit {
+		return nil, fmt.Errorf("record size exceeds maximum allowed size of %d bytes", limit)
 	}
 
 	// Trim the trailing newlines
